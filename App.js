@@ -1,114 +1,169 @@
-import React, { useState, useEffect } from 'react';
-import { StyleSheet, Text, View, TextInput, Button, FlatList, TouchableOpacity } from 'react-native';
-import { initDB, insertTask, fetchTasks, deleteTask, updateTask } from './Database';
+import React, { useEffect, useState } from 'react';
+import { StyleSheet, Text, View, TextInput, Button, FlatList, Alert } from 'react-native';
+import * as SQLite from 'expo-sqlite';
+import { GestureHandlerRootView, Swipeable } from 'react-native-gesture-handler';
+import { TouchableOpacity } from 'react-native-gesture-handler';
 
 export default function App() {
-  const [task, setTask] = useState('');
-  const [tasks, setTasks] = useState([]);
-  const [editId, setEditId] = useState(null);
+  const [db, setDb] = useState(null);
+  const [tarefa, setTarefa] = useState('');
+  const [tarefas, setTarefas] = useState([]);
 
   useEffect(() => {
-    initDB();
-    loadTasks();
+    (async () => {
+      const database = await SQLite.openDatabaseAsync('tarefasAsync.db');
+      setDb(database);
+
+      await database.execAsync(`
+        PRAGMA journal_mode = WAL;
+        CREATE TABLE IF NOT EXISTS tarefas (id INTEGER PRIMARY KEY AUTOINCREMENT, titulo TEXT NOT NULL);
+      `);
+
+      await carregarTarefas(database);
+    })();
   }, []);
 
-  const loadTasks = () => {
-    fetchTasks((success, data) => {
-      if (success) setTasks(data);
-    });
-  };
-
-  const handleDelete = (id) => {
-    deleteTask(id, (success, data) => {
-      if (success) loadTasks();
-    });
-  };
-
-  const handleEdit = (id, title) => {
-    setTask(title);
-    setEditId(id);
-  };
-
-  const handleUpdate = () => {
-    if (editId !== null) {
-      updateTask(editId, task, false, (success, data) => {
-        if (success) {
-          setTask('');
-          setEditId(null);
-          loadTasks();
-        }
-      });
+  const carregarTarefas = async (database) => {
+    try {
+      const allRows = await database.getAllAsync('SELECT * FROM tarefas');
+      setTarefas(allRows);
+    } catch (error) {
+      console.log('Erro ao carregar tarefas:', error);
     }
   };
 
-  const handleSubmit = () => {
-    if (editId !== null) {
-      handleUpdate();
-    } else {
-      if (task !== '') {
-        insertTask(task, false, (success, data) => {
-          if (success) {
-            setTask('');
-            loadTasks();
-          }
-        });
-      }
+  const adicionarTarefa = async () => {
+    if (!tarefa.trim()) return;
+
+    try {
+      await db.runAsync('INSERT INTO tarefas (titulo) VALUES (?)', tarefa);
+      setTarefa('');
+      await carregarTarefas(db);
+    } catch (error) {
+      console.log('Erro ao adicionar tarefa:', error);
     }
   };
+
+  const editarTarefa = (item) => {
+    Alert.prompt(
+      'Editar Tarefa',
+      'Altere o texto da tarefa:',
+      [
+        {
+          text: 'Cancelar',
+          style: 'cancel',
+        },
+        {
+          text: 'Salvar',
+          onPress: async (novoTexto) => {
+            if (novoTexto && novoTexto.trim()) {
+              await db.runAsync('UPDATE tarefas SET titulo = ? WHERE id = ?', novoTexto, item.id);
+              await carregarTarefas(db);
+            }
+          },
+        },
+      ],
+      'plain-text',
+      item.titulo
+    );
+  };
+
+  const deletarTarefa = async (id) => {
+    try {
+      await db.runAsync('DELETE FROM tarefas WHERE id = ?', id);
+      await carregarTarefas(db);
+    } catch (error) {
+      console.log('Erro ao deletar tarefa:', error);
+    }
+  };
+
+  const renderItem = ({ item }) => {
+    const renderRightActions = () => (
+      <View style={styles.actionsContainer}>
+        <TouchableOpacity style={styles.deleteButton} onPress={() => deletarTarefa(item.id)}>
+          <Text style={styles.deleteText}>Apagar</Text>
+        </TouchableOpacity>
+      </View>
+    );
+
+    return (
+      <Swipeable renderRightActions={renderRightActions}>
+        <TouchableOpacity style={styles.item} onPress={() => editarTarefa(item)}>
+          <Text>{item.titulo}</Text>
+        </TouchableOpacity>
+      </Swipeable>
+    );
+  };
+
+  if (!db) {
+    return (
+      <GestureHandlerRootView style={styles.container}>
+        <Text>Carregando banco de dados...</Text>
+      </GestureHandlerRootView>
+    );
+  }
 
   return (
-    <View style={styles.container}>
-      <View style={styles.content}>
-        <TextInput
-          style={styles.input}
-          placeholder="Nova tarefa"
-          value={task}
-          onChangeText={setTask}
-        />
-        <Button title={editId ? "Atualizar tarfea" : "Adicionar tarefa"} onPress={handleSubmit} />
-        <FlatList
-          data={tasks}
-          keyExtractor={item => item.id.toString()}
-          renderItem={({ item }) => (
-            <View style={styles.listItem}>
-              <Text>{item.title}</Text>
-              <View style={styles.buttons}>
-                <Button title="Editar" onPress={() => handleEdit(item.id, item.title)} />
-                <Button title="Deletar" onPress={() => handleDelete(item.id)} />
-              </View>
-            </View>
-          )}
-        />
-      </View>
-    </View>
+    <GestureHandlerRootView style={styles.container}>
+      <Text style={styles.titulo}>App SQLite</Text>
+      <TextInput
+        style={styles.input}
+        placeholder="Digite uma tarefa"
+        value={tarefa}
+        onChangeText={setTarefa}
+      />
+      <Button title="Adicionar" onPress={adicionarTarefa} />
+      <FlatList
+        data={tarefas}
+        keyExtractor={(item) => item.id.toString()}
+        renderItem={renderItem}
+        style={styles.lista}
+      />
+    </GestureHandlerRootView>
   );
 }
 
 const styles = StyleSheet.create({
   container: {
     flex: 1,
-    backgroundColor: '#fff',
-    alignItems: 'center',
-    justifyContent: 'center',
+    padding: 20,
+    paddingTop: 50,
   },
-  content: {
-    width: '90%',
+  titulo: {
+    fontSize: 24,
+    marginBottom: 20,
+    textAlign: 'center',
   },
   input: {
-    width: '90%',
-    height: 40,
-    borderColor: 'gray',
     borderWidth: 1,
-    marginBottom: 10,
-  },
-  listItem: {
     padding: 10,
-    marginTop: 5,
-    backgroundColor: 'lightgray',
-    width: '90%',
+    marginBottom: 10,
+    borderRadius: 5,
   },
-  buttons: {
+  lista: {
+    marginTop: 20,
+  },
+  item: {
+    backgroundColor: '#eee',
+    padding: 15,
+    marginBottom: 10,
+    borderRadius: 5,
+  },
+  actionsContainer: {
     flexDirection: 'row',
-    justifyContent: 'space-around',
+    justifyContent: 'flex-end',
+    alignItems: 'center',
+  },
+  deleteButton: {
+    backgroundColor: 'red',
+    justifyContent: 'center',
+    alignItems: 'center',
+    width: 80,
+    height: '100%',
+    borderRadius: 5,
+  },
+  deleteText: {
+    color: 'white',
+    fontWeight: 'bold',
   },
 });
